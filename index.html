@@ -100,6 +100,12 @@ button.cat-row{width:100%;background:transparent;border:0;border-radius:10px;pad
 button.cat-row:hover{background:var(--bg)}
 .cat-go{color:var(--muted);font-size:12px}
 .finder{display:flex;gap:8px}
+.suggest{margin-top:8px;border:1px solid var(--line);border-radius:12px;background:var(--surface);max-height:340px;overflow:auto}
+.suggest .sg-h{font-size:12px;color:var(--muted);padding:8px 12px 4px}
+.suggest button{display:flex;align-items:center;gap:8px;width:100%;text-align:start;background:transparent;border:0;border-top:1px solid var(--line);padding:10px 12px;font-size:15px;color:inherit}
+.suggest .sg-h+button{border-top:0}
+.suggest button .sg-n{margin-inline-start:auto;font-size:12px;color:var(--muted)}
+.suggest .sg-empty{padding:10px 12px;font-size:14px;color:var(--muted)}
 .finder input{flex:1;min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px 12px;font-size:16px}
 .tiphint{font-size:12px;color:var(--muted);margin:-4px 0 0}
 button.item-name{background:none;border:0;padding:0;text-align:start;text-decoration:underline dotted var(--muted);text-underline-offset:4px}
@@ -174,9 +180,10 @@ label.fld select,label.fld input{border:1px solid var(--line);background:var(--b
     <p class="tiphint" id="catsTip">دوس على أي صنف تشوف صرفه شهر بشهر وفي السنة كلها.</p>
     <ul class="cats" id="cats"></ul>
     <form class="finder" id="finder" autocomplete="off">
-      <input id="findQ" type="text" placeholder="أو اكتب حاجة معينة (مثلاً: بنزين)" aria-label="اسم الحاجة اللي عايز تشوف صرفها">
+      <input id="findQ" type="text" placeholder="دوس تشوف الأصناف، أو اكتب حاجة" aria-label="اسم الحاجة اللي عايز تشوف صرفها">
       <button class="secondary" type="submit">اعرض</button>
     </form>
+    <div class="suggest" id="findList" hidden></div>
   </section>
 
   <section class="card" aria-labelledby="yearH">
@@ -619,10 +626,49 @@ function openReport(rep){
 document.getElementById("cats").addEventListener("click",e=>{
   const b=e.target.closest("[data-rep-cat]"); if(b) openReport({kind:"cat",id:b.dataset.repCat});
 });
+/* ---------- Search: categories first, then items, filtered live ---------- */
+const findEl=document.getElementById("findQ"), findList=document.getElementById("findList");
+function searchCats(){ return allCats().concat([{id:"other",name:"حاجات تانية",color:"#868e96"}]); }
+function catMatches(q){ const k=itemKey(q); return searchCats().filter(c=>!k||itemKey(c.name).includes(k)||norm(c.name).includes(norm(q))); }
+function itemMatches(q){
+  const k=itemKey(q); if(!k) return [];
+  const map=new Map();
+  for(const list of Object.values(state.months)) for(const x of list||[]){
+    const key=itemKey(x.name); if(!key.includes(k)) continue;
+    const e=map.get(key)||{key,name:x.name,n:0,ts:0,cat:x.cat}; e.n++; if((x.ts||0)>=e.ts){ e.ts=x.ts||0; e.name=x.name; e.cat=x.cat; } map.set(key,e);
+  }
+  return [...map.values()].sort((a,b)=>(b.key===k)-(a.key===k)||b.n-a.n).slice(0,12);
+}
+function renderFind(){
+  const q=findEl.value.trim(), cats=catMatches(q), items=itemMatches(q);
+  let html="";
+  if(cats.length) html+=`<div class="sg-h">${q?"أصناف":"كل الأصناف"}</div>`+cats.map(c=>`<button type="button" data-sg-cat="${esc(c.id)}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</button>`).join("");
+  if(items.length) html+=`<div class="sg-h">حاجات اشتريتها</div>`+items.map(i=>{ const c=catById(i.cat)||{color:"#868e96",name:""}; return `<button type="button" data-sg-item="${esc(i.key)}" data-sg-name="${esc(i.name)}"><span class="dot" style="background:${c.color}"></span>${esc(i.name)}<span class="sg-n">${times(i.n)}</span></button>`; }).join("");
+  if(q&&items.length>1) html+=`<button type="button" data-sg-q="1"><b>كل اللي فيه «${esc(q)}»</b></button>`;
+  if(!html) html=`<div class="sg-empty">مفيش صنف ولا حاجة فيها «${esc(q)}»</div>`;
+  findList.innerHTML=html; findList.hidden=false;
+}
+function closeFind(){ findList.hidden=true; }
+findEl.addEventListener("focus",()=>{ renderFind(); setTimeout(()=>findEl.scrollIntoView({block:"start",behavior:"smooth"}),250); });
+findEl.addEventListener("click",renderFind);
+findEl.addEventListener("input",renderFind);
+findList.addEventListener("pointerdown",e=>e.preventDefault()); // keep the keyboard/list open while tapping
+findList.addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  if(b.dataset.sgCat) openReport({kind:"cat",id:b.dataset.sgCat});
+  else if(b.dataset.sgItem) openReport({kind:"item",key:b.dataset.sgItem,name:b.dataset.sgName});
+  else if(b.dataset.sgQ) openReport({kind:"q",q:findEl.value.trim()});
+  closeFind(); findEl.blur();
+});
+document.addEventListener("click",e=>{ if(!findList.hidden&&!e.target.closest("#finder")&&!e.target.closest("#findList")) closeFind(); });
 document.getElementById("finder").addEventListener("submit",e=>{
-  e.preventDefault(); const el=document.getElementById("findQ"), q=el.value.trim(); if(!itemKey(q)){ el.focus(); return; }
+  e.preventDefault(); const q=findEl.value.trim(); if(!itemKey(q)){ renderFind(); findEl.focus(); return; }
+  const k=itemKey(q), cats=catMatches(q), exact=searchCats().find(c=>itemKey(c.name)===k);
+  if(exact) openReport({kind:"cat",id:exact.id});
+  else if(cats.length===1&&!itemMatches(q).length) openReport({kind:"cat",id:cats[0].id});
   // everything whose name contains the words, e.g. "بنزين" also catches "بنزين 92"
-  openReport({kind:"q",q}); el.blur();
+  else openReport({kind:"q",q});
+  closeFind(); findEl.blur();
 });
 
 document.getElementById("openSettings").addEventListener("click",()=>{
