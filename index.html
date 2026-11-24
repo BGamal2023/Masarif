@@ -313,7 +313,7 @@ const state = {
   viewMonth: monthKey(new Date())
 };
 function monthKey(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); }
-function allCats(){ return DEFAULT_CATS.concat(state.settings.customCats||[]); }
+function allCats(){ const nm=state.settings.catNames||{}; return DEFAULT_CATS.map(c=>nm[c.id]?Object.assign({},c,{name:nm[c.id]}):c).concat(state.settings.customCats||[]); }
 function catById(id){ return allCats().find(c=>c.id===id) || (id==="other"?{id:"other",name:"حاجات تانية",color:"#868e96"}:null); }
 function cur(){ return curInfo(state.settings.currency); }
 function curInfo(code){ return CURRENCIES.find(c=>c.code===code) || {code, label:code, name:code}; }
@@ -543,8 +543,10 @@ document.getElementById("log").addEventListener("click",e=>{
     if(btn.dataset.armed){ state.months[m]=list.filter(i=>i.id!==id); saveMonth(m); render(); toast("اتمسح"); }
     else { btn.dataset.armed="1"; btn.textContent="متأكد؟ دوس تاني"; setTimeout(()=>{ if(btn.isConnected){ delete btn.dataset.armed; btn.textContent="امسح"; } },3000); }
   } else {
-    pickCategory({title:"صنف «"+x.name+"»", desc:"هغيّره هنا وهستخدم الصنف ده للحاجة دي بعد كده.", current:x.cat,
-      onPick:cat=>{ x.cat=cat; learn(x.name,cat); saveMonth(m); render(); }});
+    pickCategory({title:"صنف «"+x.name+"»", desc:"هنقل «"+esc(x.name)+"» كلها للصنف ده، اللي فات واللي جاي.", current:x.cat,
+      onPick:cat=>{ const k=itemKey(x.name); let n=0;
+        for(const [mk,l] of Object.entries(state.months)){ let ch=false; for(const it of l||[]) if(itemKey(it.name)===k&&it.cat!==cat){ it.cat=cat; ch=true; n++; } if(ch) saveMonth(mk); }
+        learn(x.name,cat); render(); toast(n>1?"اتنقلت "+times(n)+" لـ "+catById(cat).name:"اتنقلت لـ "+catById(cat).name); }});
   }
 });
 
@@ -677,12 +679,15 @@ document.getElementById("openSettings").addEventListener("click",()=>{
     <div class="fld"><b>العملات اللي تبدّل بينها</b><span class="note">كل حاجة بتتسجل بالعملة المختارة فوق وقت ما تضيفها.</span>
       <div class="checks">${CURRENCIES.map(c=>`<label><input type="checkbox" value="${c.code}" ${enabledCurs().includes(c.code)?"checked":""}>${c.name} (${c.label})</label>`).join("")}</div></div>
     <label class="fld">شكل الأرقام<select id="digSel"><option value="ar" ${state.settings.digits!=="en"?"selected":""}>١٢٣</option><option value="en" ${state.settings.digits==="en"?"selected":""}>123</option></select></label>
+    <div class="fld" style="display:flex;flex-direction:column;gap:6px"><b>الأصناف</b><span class="note">غيّر اسم أي صنف، أو ضيف أصناف جديدة (مثلاً: العربية لوحدها والمواصلات لوحدها).</span>
+      <div class="row" style="justify-content:flex-start"><button class="secondary" type="button" id="manageCats">عدّل الأصناف (${fmtInt(allCats().length)})</button></div></div>
     <div><b>حاجات البرنامج اتعلمها منك</b> <span class="note">(${fmtInt(learnedRows.length)})</span></div>
     ${learnedRows.length?`<ul class="learned">${learnedRows.map(([k,c])=>`<li><span>${esc(k)}</span><span>${esc((catById(c)||{name:"؟"}).name)} <button class="link danger" type="button" data-forget="${esc(k)}">انسى</button></span></li>`).join("")}</ul>`:`<p>لسه مفيش. لما تختار صنف لحاجة جديدة هتظهر هنا.</p>`}
     <div class="fld" style="display:flex;flex-direction:column;gap:6px"><b>نسخة احتياطية</b><span class="note">احفظ ملف فيه كل مصاريفك وابعته لنفسك أو حطه على Drive، وترجّع منه على أي موبايل.${state.settings.lastBackup?` آخر نسخة: ${esc(new Date(state.settings.lastBackup).toLocaleDateString(state.settings.digits==="en"?"en-GB":"ar-EG",{day:"numeric",month:"long",year:"numeric"}))}.`:""}</span>
       <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".txt,.json,text/plain,application/json" hidden></div>
       <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="ghSaveBtn">احفظ على GitHub</button><button class="secondary" type="button" id="ghLoadBtn">استرجع من GitHub</button><button class="link" type="button" id="ghSetupBtn">${ghCfg()?"إعدادات GitHub":"اربط GitHub"}</button></div></div>
     <div class="row"><button class="primary" type="button" id="closeSet" style="padding:10px 18px">تمام</button></div>`, s=>{
+    s.querySelector("#manageCats").addEventListener("click",manageCats);
     s.querySelector("#backupBtn").addEventListener("click",makeBackup);
     s.querySelector("#restoreBtn").addEventListener("click",()=>s.querySelector("#restoreFile").click());
     s.querySelector("#restoreFile").addEventListener("change",e=>{ const f=e.target.files&&e.target.files[0]; if(f) restoreBackup(f); e.target.value=""; });
@@ -700,6 +705,45 @@ document.getElementById("openSettings").addEventListener("click",()=>{
     s.querySelector("#closeSet").addEventListener("click",closeSheet);
   });
 });
+
+/* ---------- Manage categories ---------- */
+function catUse(id){ let n=0; for(const l of Object.values(state.months)) for(const it of l||[]) if(it.cat===id) n++; return n; }
+function manageCats(){
+  const custom=new Set((state.settings.customCats||[]).map(c=>c.id));
+  openSheet(`<h3>الأصناف</h3>
+    <p class="note">التغيير بيسري على كل مصاريفك اللي فاتت كمان. ولو عايز تنقل حاجة (زي البنزين) لصنف جديد، دوس "غيّر الصنف" جنبها في المصاريف، وهتتنقل كلها.</p>
+    <ul class="learned" id="catRows">${allCats().map(c=>{ const n=catUse(c.id); return `<li data-row="${esc(c.id)}"><span style="display:flex;align-items:center;gap:6px"><span class="dot" style="background:${c.color};flex:none"></span>${esc(c.name)} <span class="note">${n?"("+times(n)+")":""}</span></span><span><button class="link" type="button" data-ren="${esc(c.id)}">غيّر الاسم</button>${custom.has(c.id)?` <button class="link danger" type="button" data-delcat="${esc(c.id)}">امسح</button>`:""}</span></li>`; }).join("")}</ul>
+    <div class="newcat"><input id="addCatName" type="text" placeholder="اسم صنف جديد (مثلاً: العربية)" aria-label="صنف جديد"><button class="secondary" type="button" id="addCatBtn">أضف</button></div>
+    <div class="row"><button class="primary" type="button" id="catsDone" style="padding:10px 18px">تمام</button></div>`, s=>{
+    s.querySelector("#catsDone").addEventListener("click",()=>document.getElementById("openSettings").click());
+    const add=()=>{ const v=s.querySelector("#addCatName").value.trim(); if(!v) return;
+      if(allCats().some(c=>norm(c.name)===norm(v))){ toast("فيه صنف بالاسم ده بالفعل"); return; }
+      const custom=state.settings.customCats||[]; custom.push({id:"c"+Date.now().toString(36),name:v,color:EXTRA_COLORS[custom.length%EXTRA_COLORS.length]});
+      state.settings.customCats=custom; saveProfile(); render(); manageCats(); toast("اتضاف صنف "+v); };
+    s.querySelector("#addCatBtn").addEventListener("click",add);
+    s.querySelector("#addCatName").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); add(); } });
+    s.querySelectorAll("[data-ren]").forEach(b=>b.addEventListener("click",()=>{
+      const id=b.dataset.ren, c=catById(id), li=b.closest("li");
+      li.innerHTML=`<span class="newcat" style="flex:1;margin:0"><input type="text" value="${esc(c.name)}" aria-label="الاسم الجديد"><button class="secondary" type="button">احفظ</button></span>`;
+      const inp=li.querySelector("input"); inp.focus(); inp.select();
+      const save=()=>{ const v=inp.value.trim(); if(!v||v===c.name){ manageCats(); return; }
+        if(allCats().some(x=>x.id!==id&&norm(x.name)===norm(v))){ toast("فيه صنف بالاسم ده بالفعل"); return; }
+        const cc=(state.settings.customCats||[]).find(x=>x.id===id);
+        if(cc) cc.name=v; else { const nm=state.settings.catNames||{}; const def=DEFAULT_CATS.find(x=>x.id===id); if(def&&def.name===v) delete nm[id]; else nm[id]=v; state.settings.catNames=nm; }
+        saveProfile(); render(); manageCats(); toast("الاسم بقى: "+v); };
+      li.querySelector("button").addEventListener("click",save);
+      inp.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); save(); } });
+    }));
+    s.querySelectorAll("[data-delcat]").forEach(b=>b.addEventListener("click",()=>{
+      const id=b.dataset.delcat, n=catUse(id);
+      if(!b.dataset.armed){ b.dataset.armed="1"; b.textContent=n?"متأكد؟ "+times(n)+" هتروح لحاجات تانية":"متأكد؟ دوس تاني"; return; }
+      for(const [mk,l] of Object.entries(state.months)){ let ch=false; for(const it of l||[]) if(it.cat===id){ it.cat="other"; ch=true; } if(ch) saveMonth(mk); }
+      for(const k of Object.keys(state.learned)) if(state.learned[k]===id) delete state.learned[k];
+      state.settings.customCats=(state.settings.customCats||[]).filter(c=>c.id!==id);
+      saveProfile(); render(); manageCats(); toast("الصنف اتمسح");
+    }));
+  });
+}
 
 /* ---------- Backup / restore ---------- */
 async function makeBackup(){
@@ -731,6 +775,7 @@ function applyBackup(j){
   const bs=j.settings||{}, mine=state.settings.customCats||[], mineIds=new Set(mine.map(c=>c.id));
   (bs.customCats||[]).forEach(c=>{ if(c&&c.id&&!mineIds.has(c.id)){ mine.push(c); mineIds.add(c.id); } });
   state.settings.customCats=mine;
+  if(bs.catNames&&typeof bs.catNames==="object") state.settings.catNames=Object.assign({},bs.catNames,state.settings.catNames||{});
   if(Array.isArray(bs.currencies)) state.settings.currencies=[...new Set((state.settings.currencies||[]).concat(bs.currencies))];
   touched.forEach(saveMonth); saveProfile(); render(); closeSheet();
   toast(added?"رجّعت "+fmtInt(added)+" مصروف من النسخة":"كل اللي في النسخة موجود عندك بالفعل");
