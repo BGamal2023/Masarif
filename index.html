@@ -633,7 +633,12 @@ document.getElementById("openSettings").addEventListener("click",()=>{
     <label class="fld">شكل الأرقام<select id="digSel"><option value="ar" ${state.settings.digits!=="en"?"selected":""}>١٢٣</option><option value="en" ${state.settings.digits==="en"?"selected":""}>123</option></select></label>
     <div><b>حاجات البرنامج اتعلمها منك</b> <span class="note">(${fmtInt(learnedRows.length)})</span></div>
     ${learnedRows.length?`<ul class="learned">${learnedRows.map(([k,c])=>`<li><span>${esc(k)}</span><span>${esc((catById(c)||{name:"؟"}).name)} <button class="link danger" type="button" data-forget="${esc(k)}">انسى</button></span></li>`).join("")}</ul>`:`<p>لسه مفيش. لما تختار صنف لحاجة جديدة هتظهر هنا.</p>`}
+    <div class="fld" style="display:flex;flex-direction:column;gap:6px"><b>نسخة احتياطية</b><span class="note">احفظ ملف فيه كل مصاريفك وابعته لنفسك أو حطه على Drive، وترجّع منه على أي موبايل.${state.settings.lastBackup?` آخر نسخة: ${esc(new Date(state.settings.lastBackup).toLocaleDateString(state.settings.digits==="en"?"en-GB":"ar-EG",{day:"numeric",month:"long",year:"numeric"}))}.`:""}</span>
+      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".json,application/json,text/plain" hidden></div></div>
     <div class="row"><button class="primary" type="button" id="closeSet" style="padding:10px 18px">تمام</button></div>`, s=>{
+    s.querySelector("#backupBtn").addEventListener("click",makeBackup);
+    s.querySelector("#restoreBtn").addEventListener("click",()=>s.querySelector("#restoreFile").click());
+    s.querySelector("#restoreFile").addEventListener("change",e=>{ const f=e.target.files&&e.target.files[0]; if(f) restoreBackup(f); e.target.value=""; });
     s.querySelectorAll(".checks input").forEach(cb=>cb.addEventListener("change",()=>{
       const on=[...s.querySelectorAll(".checks input:checked")].map(x=>x.value);
       if(!on.length){ cb.checked=true; toast("لازم عملة واحدة على الأقل"); return; }
@@ -645,6 +650,47 @@ document.getElementById("openSettings").addEventListener("click",()=>{
     s.querySelector("#closeSet").addEventListener("click",closeSheet);
   });
 });
+
+/* ---------- Backup / restore ---------- */
+async function makeBackup(){
+  const now=new Date(), d=now.toISOString().slice(0,10);
+  const data={app:"masarif",version:1,exportedAt:now.toISOString(),settings:state.settings,learned:state.learned,months:state.months};
+  const name="masarif-backup-"+d+".json", text=JSON.stringify(data);
+  let done=false;
+  try{
+    const file=new File([text],name,{type:"application/json"});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:"نسخة احتياطية - مصاريفي"}); done=true; }
+  }catch(e){ if(e&&e.name==="AbortError") return; }
+  if(!done){
+    try{ const url=URL.createObjectURL(new Blob([text],{type:"application/json"})); const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000); done=true; }catch(e){}
+  }
+  if(done){ state.settings.lastBackup=now.toISOString(); saveProfile(); toast("النسخة الاحتياطية اتعملت: "+name); }
+  else toast("معرفتش أعمل الملف، جرب تاني");
+}
+function restoreBackup(file){
+  const r=new FileReader();
+  r.onload=()=>{
+    let j; try{ j=JSON.parse(r.result); }catch(e){ j=null; }
+    if(!j||j.app!=="masarif"||typeof j.months!=="object"||!j.months){ toast("الملف ده مش نسخة احتياطية من مصاريفي"); return; }
+    let added=0; const touched=[];
+    for(const [m,items] of Object.entries(j.months)){
+      if(!/^\d{4}-\d{2}$/.test(m)||!Array.isArray(items)) continue;
+      const list=state.months[m]=state.months[m]||[], ids=new Set(list.map(i=>i.id));
+      let ch=false;
+      for(const it of items){ if(!it||!it.id||ids.has(it.id)||typeof it.name!=="string"||!isFinite(+it.price)) continue; list.push(it); ids.add(it.id); added++; ch=true; }
+      if(ch){ list.sort((x,y)=>(x.ts||0)-(y.ts||0)); touched.push(m); }
+    }
+    if(j.learned&&typeof j.learned==="object") state.learned=Object.assign({},state.learned,j.learned);
+    const bs=j.settings||{}, mine=state.settings.customCats||[], mineIds=new Set(mine.map(c=>c.id));
+    (bs.customCats||[]).forEach(c=>{ if(c&&c.id&&!mineIds.has(c.id)){ mine.push(c); mineIds.add(c.id); } });
+    state.settings.customCats=mine;
+    if(Array.isArray(bs.currencies)) state.settings.currencies=[...new Set((state.settings.currencies||[]).concat(bs.currencies))];
+    touched.forEach(saveMonth); saveProfile(); render(); closeSheet();
+    toast(added?"رجّعت "+fmtInt(added)+" مصروف من النسخة":"كل اللي في النسخة موجود عندك بالفعل");
+  };
+  r.onerror=()=>toast("معرفتش أقرا الملف");
+  r.readAsText(file);
+}
 
 let tt; function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.hidden=false; clearTimeout(tt); tt=setTimeout(()=>t.hidden=true,2600); }
 
