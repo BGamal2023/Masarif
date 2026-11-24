@@ -634,11 +634,15 @@ document.getElementById("openSettings").addEventListener("click",()=>{
     <div><b>حاجات البرنامج اتعلمها منك</b> <span class="note">(${fmtInt(learnedRows.length)})</span></div>
     ${learnedRows.length?`<ul class="learned">${learnedRows.map(([k,c])=>`<li><span>${esc(k)}</span><span>${esc((catById(c)||{name:"؟"}).name)} <button class="link danger" type="button" data-forget="${esc(k)}">انسى</button></span></li>`).join("")}</ul>`:`<p>لسه مفيش. لما تختار صنف لحاجة جديدة هتظهر هنا.</p>`}
     <div class="fld" style="display:flex;flex-direction:column;gap:6px"><b>نسخة احتياطية</b><span class="note">احفظ ملف فيه كل مصاريفك وابعته لنفسك أو حطه على Drive، وترجّع منه على أي موبايل.${state.settings.lastBackup?` آخر نسخة: ${esc(new Date(state.settings.lastBackup).toLocaleDateString(state.settings.digits==="en"?"en-GB":"ar-EG",{day:"numeric",month:"long",year:"numeric"}))}.`:""}</span>
-      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".txt,.json,text/plain,application/json" hidden></div></div>
+      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".txt,.json,text/plain,application/json" hidden></div>
+      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="ghSaveBtn">احفظ على GitHub</button><button class="secondary" type="button" id="ghLoadBtn">استرجع من GitHub</button><button class="link" type="button" id="ghSetupBtn">${ghCfg()?"إعدادات GitHub":"اربط GitHub"}</button></div></div>
     <div class="row"><button class="primary" type="button" id="closeSet" style="padding:10px 18px">تمام</button></div>`, s=>{
     s.querySelector("#backupBtn").addEventListener("click",makeBackup);
     s.querySelector("#restoreBtn").addEventListener("click",()=>s.querySelector("#restoreFile").click());
     s.querySelector("#restoreFile").addEventListener("change",e=>{ const f=e.target.files&&e.target.files[0]; if(f) restoreBackup(f); e.target.value=""; });
+    s.querySelector("#ghSaveBtn").addEventListener("click",ghSave);
+    s.querySelector("#ghLoadBtn").addEventListener("click",ghList);
+    s.querySelector("#ghSetupBtn").addEventListener("click",()=>ghSetup());
     s.querySelectorAll(".checks input").forEach(cb=>cb.addEventListener("change",()=>{
       const on=[...s.querySelectorAll(".checks input:checked")].map(x=>x.value);
       if(!on.length){ cb.checked=true; toast("لازم عملة واحدة على الأقل"); return; }
@@ -667,29 +671,105 @@ async function makeBackup(){
   if(done){ state.settings.lastBackup=now.toISOString(); saveProfile(); toast("النسخة الاحتياطية اتعملت: "+name); }
   else toast("معرفتش أعمل الملف، جرب تاني");
 }
+function applyBackup(j){
+  if(!j||j.app!=="masarif"||typeof j.months!=="object"||!j.months){ toast("الملف ده مش نسخة احتياطية من مصاريفي"); return; }
+  let added=0; const touched=[];
+  for(const [m,items] of Object.entries(j.months)){
+  if(!/^\d{4}-\d{2}$/.test(m)||!Array.isArray(items)) continue;
+  const list=state.months[m]=state.months[m]||[], ids=new Set(list.map(i=>i.id));
+  let ch=false;
+  for(const it of items){ if(!it||!it.id||ids.has(it.id)||typeof it.name!=="string"||!isFinite(+it.price)) continue; list.push(it); ids.add(it.id); added++; ch=true; }
+  if(ch){ list.sort((x,y)=>(x.ts||0)-(y.ts||0)); touched.push(m); }
+  }
+  if(j.learned&&typeof j.learned==="object") state.learned=Object.assign({},state.learned,j.learned);
+  const bs=j.settings||{}, mine=state.settings.customCats||[], mineIds=new Set(mine.map(c=>c.id));
+  (bs.customCats||[]).forEach(c=>{ if(c&&c.id&&!mineIds.has(c.id)){ mine.push(c); mineIds.add(c.id); } });
+  state.settings.customCats=mine;
+  if(Array.isArray(bs.currencies)) state.settings.currencies=[...new Set((state.settings.currencies||[]).concat(bs.currencies))];
+  touched.forEach(saveMonth); saveProfile(); render(); closeSheet();
+  toast(added?"رجّعت "+fmtInt(added)+" مصروف من النسخة":"كل اللي في النسخة موجود عندك بالفعل");
+}
 function restoreBackup(file){
   const r=new FileReader();
-  r.onload=()=>{
-    let j; try{ j=JSON.parse(r.result); }catch(e){ j=null; }
-    if(!j||j.app!=="masarif"||typeof j.months!=="object"||!j.months){ toast("الملف ده مش نسخة احتياطية من مصاريفي"); return; }
-    let added=0; const touched=[];
-    for(const [m,items] of Object.entries(j.months)){
-      if(!/^\d{4}-\d{2}$/.test(m)||!Array.isArray(items)) continue;
-      const list=state.months[m]=state.months[m]||[], ids=new Set(list.map(i=>i.id));
-      let ch=false;
-      for(const it of items){ if(!it||!it.id||ids.has(it.id)||typeof it.name!=="string"||!isFinite(+it.price)) continue; list.push(it); ids.add(it.id); added++; ch=true; }
-      if(ch){ list.sort((x,y)=>(x.ts||0)-(y.ts||0)); touched.push(m); }
-    }
-    if(j.learned&&typeof j.learned==="object") state.learned=Object.assign({},state.learned,j.learned);
-    const bs=j.settings||{}, mine=state.settings.customCats||[], mineIds=new Set(mine.map(c=>c.id));
-    (bs.customCats||[]).forEach(c=>{ if(c&&c.id&&!mineIds.has(c.id)){ mine.push(c); mineIds.add(c.id); } });
-    state.settings.customCats=mine;
-    if(Array.isArray(bs.currencies)) state.settings.currencies=[...new Set((state.settings.currencies||[]).concat(bs.currencies))];
-    touched.forEach(saveMonth); saveProfile(); render(); closeSheet();
-    toast(added?"رجّعت "+fmtInt(added)+" مصروف من النسخة":"كل اللي في النسخة موجود عندك بالفعل");
-  };
+  r.onload=()=>{ let j; try{ j=JSON.parse(r.result); }catch(e){ j=null; } applyBackup(j); };
   r.onerror=()=>toast("معرفتش أقرا الملف");
   r.readAsText(file);
+}
+
+/* ---------- GitHub backup (private repo, token stays on this phone only) ---------- */
+const GHK="masarif-gh";
+function ghCfg(){ try{ const c=JSON.parse(localStorage.getItem(GHK)||"null"); return c&&c.repo&&c.token?c:null; }catch(e){ return null; } }
+function b64(text){ const bytes=new TextEncoder().encode(text); let s=""; for(let i=0;i<bytes.length;i+=0x8000) s+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000)); return btoa(s); }
+async function gh(cfg,path,opt={}){
+  const r=await fetch("https://api.github.com/repos/"+cfg.repo+path,Object.assign({},opt,{headers:Object.assign({"Authorization":"Bearer "+cfg.token,"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"},opt.headers||{})}));
+  if(!r.ok){ const e=new Error("gh "+r.status); e.status=r.status; throw e; }
+  return r;
+}
+function ghErr(e){
+  if(!navigator.onLine) return "مفيش نت، جرب تاني لما تتوصل";
+  if(e&&e.status===401) return "الـ token غلط أو انتهى، اعمل واحد جديد من إعدادات GitHub";
+  if(e&&(e.status===403||e.status===404)) return "مش قادر أوصل للـ repo، اتأكد من الاسم وإن الـ token ليه صلاحية Contents: Read and write عليه";
+  return "حصلت مشكلة في الاتصال بـ GitHub، جرب تاني";
+}
+function ghSetup(after){
+  const c=ghCfg()||{repo:"",token:""};
+  openSheet(`<h3>ربط GitHub</h3>
+    <p class="note">النسخ هتتحفظ في repo <b>خاص (Private)</b> بتاعك. الـ token بيتحفظ على الموبايل ده بس، ومش بيدخل في ملف النسخة الاحتياطية.</p>
+    <label class="fld">اسم الـ repo (صاحبه/اسمه)<input id="ghRepo" type="text" dir="ltr" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="BGamal2023/masarif-data" value="${esc(c.repo)}"></label>
+    <label class="fld">الـ token<input id="ghTok" type="password" dir="ltr" autocomplete="off" placeholder="github_pat_..." value="${esc(c.token)}"></label>
+    <div class="row"><button class="primary" type="button" id="ghOk" style="padding:10px 18px">جرّب واحفظ</button>${ghCfg()?`<button class="link danger" type="button" id="ghOff">افصل GitHub</button>`:""}<button class="link" type="button" id="ghCancel">إلغاء</button></div>`, s=>{
+    s.querySelector("#ghCancel").addEventListener("click",closeSheet);
+    const off=s.querySelector("#ghOff"); if(off) off.addEventListener("click",()=>{ try{ localStorage.removeItem(GHK); }catch(e){} closeSheet(); toast("اتفصل GitHub من الموبايل ده"); });
+    s.querySelector("#ghOk").addEventListener("click",async ev=>{
+      const repo=s.querySelector("#ghRepo").value.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/\/+$/,""), token=s.querySelector("#ghTok").value.trim();
+      if(!/^[\w.-]+\/[\w.-]+$/.test(repo)){ toast("اكتب الـ repo بالشكل ده: صاحبه/اسمه"); return; }
+      if(!token){ toast("حط الـ token"); return; }
+      const btn=ev.currentTarget; btn.disabled=true; btn.textContent="بجرب...";
+      try{
+        const info=await (await gh({repo,token},"")).json();
+        if(!info.private){ toast("الـ repo ده عام، أي حد يقدر يشوف مصاريفك. اعمله Private الأول"); return; }
+        if(info.permissions&&info.permissions.push===false){ toast("الـ token ده مش بيقدر يكتب في الـ repo"); return; }
+        try{ localStorage.setItem(GHK,JSON.stringify({repo,token})); }catch(e){ toast("معرفتش أحفظ الإعداد على الموبايل"); return; }
+        closeSheet(); toast("تمام، اتربط GitHub"); if(after) after();
+      }catch(e){ toast(ghErr(e)); }
+      finally{ if(btn.isConnected){ btn.disabled=false; btn.textContent="جرّب واحفظ"; } }
+    });
+  });
+}
+async function ghSave(ev){
+  const cfg=ghCfg(); if(!cfg){ ghSetup(ghSave); return; }
+  const btn=ev&&ev.currentTarget; if(btn){ btn.disabled=true; btn.textContent="بحفظ..."; }
+  const now=new Date(), p2=n=>String(n).padStart(2,"0");
+  const stamp=now.getFullYear()+"-"+p2(now.getMonth()+1)+"-"+p2(now.getDate())+"_"+p2(now.getHours())+"-"+p2(now.getMinutes())+"-"+p2(now.getSeconds());
+  const data={app:"masarif",version:1,exportedAt:now.toISOString(),settings:state.settings,learned:state.learned,months:state.months};
+  try{
+    await gh(cfg,"/contents/backups/masarif-"+stamp+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:"Backup "+stamp,content:b64(JSON.stringify(data))})});
+    state.settings.lastBackup=now.toISOString(); saveProfile(); toast("اتحفظت على GitHub ✓");
+  }catch(e){ toast(ghErr(e)); }
+  finally{ if(btn&&btn.isConnected){ btn.disabled=false; btn.textContent="احفظ على GitHub"; } }
+}
+function backupLabel(name){
+  const m=name.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/); if(!m) return name;
+  const d=new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5]);
+  return d.toLocaleString(state.settings.digits==="en"?"en-GB":"ar-EG",{weekday:"long",day:"numeric",month:"long",year:"numeric",hour:"numeric",minute:"2-digit"});
+}
+async function ghList(ev){
+  const cfg=ghCfg(); if(!cfg){ ghSetup(ghList); return; }
+  const btn=ev&&ev.currentTarget; if(btn){ btn.disabled=true; btn.textContent="بجيب النسخ..."; }
+  let files=[];
+  try{ files=await (await gh(cfg,"/contents/backups")).json(); }
+  catch(e){ if(e&&e.status===404) files=[]; else { toast(ghErr(e)); if(btn&&btn.isConnected){ btn.disabled=false; btn.textContent="استرجع من GitHub"; } return; } }
+  files=(Array.isArray(files)?files:[]).filter(f=>f.type==="file"&&/^masarif-.*\.json$/.test(f.name)).sort((a,b)=>b.name.localeCompare(a.name));
+  openSheet(`<h3>استرجع من GitHub</h3>
+    ${files.length?`<p class="note">اختار النسخة. الاسترجاع بيضيف اللي مش عندك بس، ومش بيمسح حاجة.</p><div class="pick" style="grid-template-columns:1fr">${files.slice(0,30).map((f,i)=>`<button type="button" data-ghf="${esc(f.path)}">${i===0?"<b>الأحدث:</b> ":""}${esc(backupLabel(f.name))}</button>`).join("")}</div>`:`<p>لسه مفيش نسخ محفوظة على GitHub. دوس "احفظ على GitHub" الأول.</p>`}
+    <div class="row"><button class="link" type="button" id="ghBack">رجوع</button></div>`, s=>{
+    s.querySelector("#ghBack").addEventListener("click",closeSheet);
+    s.querySelectorAll("[data-ghf]").forEach(b=>b.addEventListener("click",async()=>{
+      b.disabled=true; b.textContent="بسترجع...";
+      try{ const r=await gh(cfg,"/contents/"+b.dataset.ghf.split("/").map(encodeURIComponent).join("/"),{headers:{"Accept":"application/vnd.github.raw+json"}}); let j=null; try{ j=JSON.parse(await r.text()); }catch(e){} applyBackup(j); }
+      catch(e){ toast(ghErr(e)); if(b.isConnected){ b.disabled=false; b.textContent=backupLabel(b.dataset.ghf.split("/").pop()); } }
+    }));
+  });
 }
 
 let tt; function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.hidden=false; clearTimeout(tt); tt=setTimeout(()=>t.hidden=true,2600); }
