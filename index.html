@@ -634,7 +634,7 @@ document.getElementById("openSettings").addEventListener("click",()=>{
     <div><b>حاجات البرنامج اتعلمها منك</b> <span class="note">(${fmtInt(learnedRows.length)})</span></div>
     ${learnedRows.length?`<ul class="learned">${learnedRows.map(([k,c])=>`<li><span>${esc(k)}</span><span>${esc((catById(c)||{name:"؟"}).name)} <button class="link danger" type="button" data-forget="${esc(k)}">انسى</button></span></li>`).join("")}</ul>`:`<p>لسه مفيش. لما تختار صنف لحاجة جديدة هتظهر هنا.</p>`}
     <div class="fld" style="display:flex;flex-direction:column;gap:6px"><b>نسخة احتياطية</b><span class="note">احفظ ملف فيه كل مصاريفك وابعته لنفسك أو حطه على Drive، وترجّع منه على أي موبايل.${state.settings.lastBackup?` آخر نسخة: ${esc(new Date(state.settings.lastBackup).toLocaleDateString(state.settings.digits==="en"?"en-GB":"ar-EG",{day:"numeric",month:"long",year:"numeric"}))}.`:""}</span>
-      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".json,application/json,text/plain" hidden></div></div>
+      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".txt,.json,text/plain,application/json" hidden></div></div>
     <div class="row"><button class="primary" type="button" id="closeSet" style="padding:10px 18px">تمام</button></div>`, s=>{
     s.querySelector("#backupBtn").addEventListener("click",makeBackup);
     s.querySelector("#restoreBtn").addEventListener("click",()=>s.querySelector("#restoreFile").click());
@@ -655,14 +655,14 @@ document.getElementById("openSettings").addEventListener("click",()=>{
 async function makeBackup(){
   const now=new Date(), d=now.toISOString().slice(0,10);
   const data={app:"masarif",version:1,exportedAt:now.toISOString(),settings:state.settings,learned:state.learned,months:state.months};
-  const name="masarif-backup-"+d+".json", text=JSON.stringify(data);
+  const name="masarif-backup-"+d+".txt", text=JSON.stringify(data);
   let done=false;
   try{
-    const file=new File([text],name,{type:"application/json"});
+    const file=new File([text],name,{type:"text/plain"});
     if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:"نسخة احتياطية - مصاريفي"}); done=true; }
   }catch(e){ if(e&&e.name==="AbortError") return; }
   if(!done){
-    try{ const url=URL.createObjectURL(new Blob([text],{type:"application/json"})); const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000); done=true; }catch(e){}
+    try{ const url=URL.createObjectURL(new Blob([text],{type:"text/plain"})); const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000); done=true; }catch(e){}
   }
   if(done){ state.settings.lastBackup=now.toISOString(); saveProfile(); toast("النسخة الاحتياطية اتعملت: "+name); }
   else toast("معرفتش أعمل الملف، جرب تاني");
