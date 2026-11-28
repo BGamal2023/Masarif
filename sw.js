@@ -1,4 +1,4 @@
-const CACHE="masarif-v9";
+const CACHE="masarif-v10";
 const FILES=["./","index.html","manifest.webmanifest","icon-192.png","icon-512.png"];
 // always ask the server (no-cache = revalidate), so a new version shows on the next open
 self.addEventListener("install",e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES.map(f=>new Request(f,{cache:"no-cache"})))).then(()=>self.skipWaiting()));});
