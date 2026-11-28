@@ -214,12 +214,14 @@ body{padding-bottom:calc(200px + env(safe-area-inset-bottom,0px))}
     <h2 id="catsH">الصرف حسب الصنف <span id="catsCount"></span></h2>
     <p class="tiphint" id="catsTip">دوس على أي صنف تشوف صرفه شهر بشهر وفي السنة كلها.</p>
     <ul class="cats" id="cats"></ul>
+    <div class="cards-tools"><button class="secondary" type="button" data-manage-cats>+ صنف جديد / عدّل الأصناف</button></div>
   </section>
   </div>
 
   <div class="page" data-page="log" hidden>
   <section class="card" aria-labelledby="logH">
     <h2 id="logH">المشتريات <span id="logCount"></span></h2>
+    <div class="cards-tools"><button class="secondary" type="button" data-manage-cats>+ صنف جديد / عدّل الأصناف</button></div>
     <ul class="log" id="log"></ul>
   </section>
   </div>
@@ -623,12 +625,26 @@ function addExpense(name,price,cat){
 }
 function learn(name,cat){ state.learned[itemKey(name)]=cat; saveProfile(); }
 
+let forcedCat=null;
+function showHint(g){
+  if(!nameEl.value.trim()){ hint.innerHTML=""; return; }
+  const c=forcedCat?catById(forcedCat):g?catById(g.cat):null;
+  hint.innerHTML=(c?"هيتحط في: <b>"+esc(c.name)+"</b>"+(!forcedCat&&g.how==="learned"?" (من اختيارك قبل كده)":""):"صنف جديد، هسألك عليه")+
+    ` <button type="button" class="link" id="hintPick" style="font-size:12px">${c?"اختار صنف تاني":"اختار الصنف دلوقتي"}</button>`;
+}
+document.getElementById("hint").addEventListener("click",e=>{
+  if(!e.target.closest("#hintPick")) return;
+  const nm=nameEl.value.trim().replace(/\s+[\d٠-٩.,٫]+\s*$/,"");
+  pickCategory({title:"«"+nm+"» يتحط في أنهي صنف؟", desc:"تقدر تختار صنف موجود أو تكتب صنف جديد تحت.", current:forcedCat,
+    onPick:cat=>{ forcedCat=cat; learn(nm,cat); showHint(guessCategory(nm)); priceEl.focus(); }});
+});
 const form=document.getElementById("addForm"), nameEl=document.getElementById("itemName"), priceEl=document.getElementById("itemPrice"), hint=document.getElementById("hint");
 nameEl.addEventListener("input",()=>{
   // "عيش 20" in the name box: move the number into the price box
   const mm=toLatinDigits(nameEl.value).match(/^(.*\S)\s+(\d+(?:\.\d+)?)\s*$/);
   const g=guessCategory(mm?mm[1]:nameEl.value);
-  hint.textContent = nameEl.value.trim() ? (g? "هيتحط في: "+catById(g.cat).name + (g.how==="learned"?" (من اختيارك قبل كده)":"") : "صنف جديد، هسألك عليه") : "";
+  forcedCat=null; showHint(g);
+
 });
 form.addEventListener("submit",e=>{
   e.preventDefault();
@@ -638,7 +654,7 @@ form.addEventListener("submit",e=>{
   const price=parsePrice(p);
   if(!name){ nameEl.focus(); return; }
   if(price===null){ hint.textContent="اكتب السعر بالأرقام، مثلاً 25"; priceEl.focus(); return; }
-  const g=guessCategory(name);
+  const g=forcedCat?{cat:forcedCat,how:"picked"}:guessCategory(name); forcedCat=null;
   const done=(cat,how)=>{ addExpense(name,price,cat); nameEl.value=""; priceEl.value=""; hint.textContent="";
     toast("اتضاف "+name+" في "+catById(cat).name+(how==="asked"?"، وهفتكره المرة الجاية":"")); nameEl.focus(); };
   if(g){ done(g.cat,g.how); }
@@ -778,6 +794,7 @@ function editGroup(id){
     });
   });
 }
+document.querySelectorAll("[data-manage-cats]").forEach(b=>b.addEventListener("click",()=>manageCats(null)));
 document.getElementById("addGroup").addEventListener("click",()=>editGroup(null));
 document.getElementById("openBudget").addEventListener("click",openBudget);
 document.getElementById("sumBudget").addEventListener("click",()=>{ if(totalLimit()) showTab("budget"); else openBudget(); });
@@ -926,7 +943,7 @@ document.getElementById("openSettings").addEventListener("click",()=>{
       <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="backupBtn">احفظ نسخة احتياطية</button><button class="secondary" type="button" id="restoreBtn">استرجع من نسخة</button><input type="file" id="restoreFile" accept=".txt,.json,text/plain,application/json" hidden></div>
       <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="secondary" type="button" id="ghSaveBtn">احفظ على GitHub</button><button class="secondary" type="button" id="ghLoadBtn">استرجع من GitHub</button><button class="link" type="button" id="ghSetupBtn">${ghCfg()?"إعدادات GitHub":"اربط GitHub"}</button></div></div>
     <div class="row"><button class="primary" type="button" id="closeSet" style="padding:10px 18px">تمام</button></div>`, s=>{
-    s.querySelector("#manageCats").addEventListener("click",manageCats);
+    s.querySelector("#manageCats").addEventListener("click",()=>manageCats(()=>document.getElementById("openSettings").click()));
     s.querySelector("#backupBtn").addEventListener("click",makeBackup);
     s.querySelector("#restoreBtn").addEventListener("click",()=>s.querySelector("#restoreFile").click());
     s.querySelector("#restoreFile").addEventListener("change",e=>{ const f=e.target.files&&e.target.files[0]; if(f) restoreBackup(f); e.target.value=""; });
@@ -947,14 +964,16 @@ document.getElementById("openSettings").addEventListener("click",()=>{
 
 /* ---------- Manage categories ---------- */
 function catUse(id){ let n=0; for(const l of Object.values(state.months)) for(const it of l||[]) if(it.cat===id) n++; return n; }
-function manageCats(){
+let catsBack=null;
+function manageCats(back){
+  if(typeof back==="function") catsBack=back; else if(back===null) catsBack=null;
   const custom=new Set((state.settings.customCats||[]).map(c=>c.id));
   openSheet(`<h3>الأصناف</h3>
     <p class="note">التغيير بيسري على كل مصاريفك اللي فاتت كمان. ولو عايز تنقل حاجة (زي البنزين) لصنف جديد، دوس "غيّر الصنف" جنبها في المصاريف، وهتتنقل كلها.</p>
     <ul class="learned" id="catRows">${allCats().map(c=>{ const n=catUse(c.id); return `<li data-row="${esc(c.id)}"><span style="display:flex;align-items:center;gap:6px"><span class="dot" style="background:${c.color};flex:none"></span>${esc(c.name)} <span class="note">${n?"("+times(n)+")":""}</span></span><span><button class="link" type="button" data-ren="${esc(c.id)}">غيّر الاسم</button>${custom.has(c.id)?` <button class="link danger" type="button" data-delcat="${esc(c.id)}">امسح</button>`:""}</span></li>`; }).join("")}</ul>
     <div class="newcat"><input id="addCatName" type="text" placeholder="اسم صنف جديد (مثلاً: العربية)" aria-label="صنف جديد"><button class="secondary" type="button" id="addCatBtn">أضف</button></div>
     <div class="row"><button class="primary" type="button" id="catsDone" style="padding:10px 18px">تمام</button></div>`, s=>{
-    s.querySelector("#catsDone").addEventListener("click",()=>document.getElementById("openSettings").click());
+    s.querySelector("#catsDone").addEventListener("click",()=>{ if(catsBack) catsBack(); else closeSheet(); });
     const add=()=>{ const v=s.querySelector("#addCatName").value.trim(); if(!v) return;
       if(allCats().some(c=>norm(c.name)===norm(v))){ toast("فيه صنف بالاسم ده بالفعل"); return; }
       const custom=state.settings.customCats||[]; custom.push({id:"c"+Date.now().toString(36),name:v,color:EXTRA_COLORS[custom.length%EXTRA_COLORS.length]});
