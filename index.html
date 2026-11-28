@@ -150,6 +150,24 @@ label.fld select,label.fld input{border:1px solid var(--line);background:var(--b
 .learned li{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding-bottom:6px}
 .note{font-size:12px;color:var(--muted)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:10px;font-size:14px;z-index:30;max-width:calc(100% - 32px)}
+/* Budgets & groups */
+:root{--warn:#b35c00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--warn:#f5a524}}
+:root[data-theme="dark"]{--warn:#f5a524}
+.sum-budget{margin-top:8px;background:color-mix(in srgb,var(--accent-ink) 12%,transparent);border:0;border-radius:12px;padding:10px 12px;color:var(--accent-ink);text-align:start;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.sum-budget .sb-top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.sum-budget .sb-bar{height:8px;background:color-mix(in srgb,var(--accent-ink) 22%,transparent);border-radius:99px;overflow:hidden}
+.sum-budget .sb-bar i{display:block;height:100%;border-radius:99px;background:var(--accent-ink)}
+.sum-budget.over{background:color-mix(in srgb,#e03131 35%,transparent)}
+.bud-ok{color:var(--muted)} .bud-warn{color:var(--warn);font-weight:600} .bud-over{color:var(--danger);font-weight:600}
+.bar.limit{height:10px;position:relative}
+.cards-tools{display:flex;gap:8px;flex-wrap:wrap}
+.grp-li{display:flex;flex-direction:column;gap:2px}
+.grp-li .grp-tools{display:flex;justify-content:flex-end}
+.bud-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.bud-list li{display:grid;grid-template-columns:auto 1fr 110px;gap:4px 10px;align-items:center}
+.bud-list li .note{grid-column:2 / -1;margin-top:-4px}
+.bud-list input,.money-in{width:100%;min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px 12px;font-size:16px;text-align:center}
 @media (max-width:380px){.addbar form{grid-template-columns:1fr 90px}.addbar .primary{grid-column:1 / -1;padding:10px}}
 @media (prefers-reduced-motion:no-preference){.bar i{transition:width .4s ease}}
 </style>
@@ -173,6 +191,7 @@ label.fld select,label.fld input{border:1px solid var(--line);background:var(--b
     <div class="total-label">صرفت الشهر ده</div>
     <div class="total num"><span id="total">٠</span><small id="cur"></small></div>
     <div class="sub" id="subline"></div>
+    <button type="button" class="sum-budget" id="sumBudget"></button>
   </div>
 
   <section class="card" aria-labelledby="catsH">
@@ -184,6 +203,13 @@ label.fld select,label.fld input{border:1px solid var(--line);background:var(--b
       <button class="secondary" type="submit">اعرض</button>
     </form>
     <div class="suggest" id="findList" hidden></div>
+    <div class="cards-tools"><button class="secondary" type="button" id="openBudget">ميزانية الشهر</button></div>
+  </section>
+
+  <section class="card" aria-labelledby="grpH">
+    <h2 id="grpH">المجموعات <span id="grpCount"></span></h2>
+    <ul class="cats" id="groups"></ul>
+    <div class="cards-tools"><button class="secondary" type="button" id="addGroup">أضف مجموعة</button></div>
   </section>
 
   <section class="card" aria-labelledby="yearH">
@@ -325,6 +351,22 @@ function enabledCurs(){
   return list;
 }
 
+/* ---------- Budgets (monthly limits, per currency) and category groups ---------- */
+// settings.budgets = {total:{EGP:5000}, cats:{food:{EGP:2000}}}; settings.groups = [{id,name,color,cats:[ids],limits:{EGP:3000}}]
+function budgets(){ const b=state.settings.budgets||{}; return {total:b.total||{}, cats:b.cats||{}}; }
+function totalLimit(){ const v=+budgets().total[state.settings.currency]; return v>0?v:null; }
+function catLimit(id){ const c=budgets().cats[id]; const v=c?+c[state.settings.currency]:0; return v>0?v:null; }
+function setLimit(obj,v){ const c=state.settings.currency; if(v>0) obj[c]=v; else delete obj[c]; return obj; }
+function groups(){ return Array.isArray(state.settings.groups)?state.settings.groups:[]; }
+function grpLimit(g){ const v=g&&g.limits?+g.limits[state.settings.currency]:0; return v>0?v:null; }
+function budLevel(spent,limit){ const p=spent/limit; return p>1?"over":p>=0.8?"warn":"ok"; }
+function budColor(lv,base){ return lv==="over"?"var(--danger)":lv==="warn"?"var(--warn)":base; }
+function budText(spent,limit){
+  const L=cur().label, pct=Math.round(spent/limit*100), lv=budLevel(spent,limit);
+  if(lv==="over") return `<span class="bud-over">عديت الحد بـ ${fmt(Math.round((spent-limit)*100)/100)} ${esc(L)} (${fmtInt(pct)}٪)</span>`;
+  return `<span class="bud-${lv}">باقي ${fmt(Math.round((limit-spent)*100)/100)} من ${fmt(limit)} ${esc(L)} · استهلكت ${fmtInt(pct)}٪</span>`;
+}
+
 /* ---------- Storage: db when available, browser storage as fallback ---------- */
 let db=null, uid=null, ready=false;
 const LS="expenses-trial-v1";
@@ -421,19 +463,45 @@ function render(){
     : "لسه مفيش مصاريف بال"+cur().name+" في الشهر ده";
   if(othersText) document.getElementById("subline").textContent += " · وكمان صرفت "+othersText;
 
-  // categories
+  // month budget
+  const tl=totalLimit(), sb=document.getElementById("sumBudget");
+  if(tl){
+    const lv=budLevel(total,tl), pct=Math.round(total/tl*100);
+    sb.className="sum-budget"+(lv==="over"?" over":"");
+    sb.innerHTML=`<span class="sb-top"><span>ميزانية الشهر ${fmt(tl)} ${esc(cur().label)}</span><b class="num">${fmtInt(pct)}٪</b></span>
+      <span class="sb-bar"><i style="width:${Math.min(100,pct)}%"></i></span>
+      <span>${lv==="over"?"⚠ عديت الميزانية بـ "+fmt(Math.round((total-tl)*100)/100):"باقي "+fmt(Math.round((tl-total)*100)/100)} ${esc(cur().label)}</span>`;
+  } else { sb.className="sum-budget"; sb.innerHTML=`<span>+ حط حد (ميزانية) للشهر بال${esc(cur().name)}</span>`; }
+  document.getElementById("openBudget").textContent = tl||Object.keys(budgets().cats).some(id=>catLimit(id)) ? "عدّل ميزانية الشهر" : "حط ميزانية للشهر ولكل صنف";
+
+  // categories (with a budget they show even before any spending)
   const by={}; items.forEach(x=>{ (by[x.cat]=by[x.cat]||{sum:0,n:0}); by[x.cat].sum+=x.price; by[x.cat].n++; });
+  Object.keys(budgets().cats).forEach(id=>{ if(catLimit(id)&&catById(id)&&!by[id]) by[id]={sum:0,n:0}; });
   const rows=Object.entries(by).sort((a,b)=>b[1].sum-a[1].sum);
-  const max=rows.length?rows[0][1].sum:1;
+  const max=rows.length?rows[0][1].sum||1:1;
   const catsEl=document.getElementById("cats");
   document.getElementById("catsCount").textContent = rows.length? fmtInt(rows.length)+" صنف":"";
   document.getElementById("catsTip").hidden = !rows.length;
   catsEl.innerHTML = rows.length ? rows.map(([id,v])=>{
-    const c=catById(id)||{name:id,color:"#868e96"}; const pct=total?Math.round(v.sum/total*100):0;
+    const c=catById(id)||{name:id,color:"#868e96"}; const pct=total?Math.round(v.sum/total*100):0, lim=catLimit(id);
+    const lv=lim?budLevel(v.sum,lim):"ok", w=lim?Math.min(100,v.sum/lim*100):Math.max(3,v.sum/max*100);
     return `<li><button type="button" class="cat-row" data-rep-cat="${esc(id)}"><span class="dot" style="background:${c.color}"></span><span class="cat-name">${esc(c.name)}</span><span class="cat-amt num">${fmt(v.sum)} ${esc(cur().label)}</span>
-      <span class="cat-meta">${fmtInt(pct)}٪ من الشهر · ${fmtInt(v.n)} ${v.n===1?"حاجة":"حاجات"} <span class="cat-go">· تقرير الصنف ‹</span></span>
-      <span class="bar"><i style="width:${Math.max(3,v.sum/max*100)}%;background:${c.color}"></i></span></button></li>`;
+      <span class="cat-meta">${lim?budText(v.sum,lim):`${fmtInt(pct)}٪ من الشهر · ${fmtInt(v.n)} ${v.n===1?"حاجة":"حاجات"}`} <span class="cat-go">· تقرير ‹</span></span>
+      <span class="bar${lim?" limit":""}"><i style="width:${w}%;background:${budColor(lv,c.color)}"></i></span></button></li>`;
   }).join("") : `<li class="empty">الأصناف هتظهر هنا أول ما تضيف مصاريف.</li>`;
+
+  // groups
+  const gs=groups(), gEl=document.getElementById("groups");
+  document.getElementById("grpCount").textContent = gs.length? fmtInt(gs.length)+" مجموعة":"";
+  gEl.innerHTML = gs.length ? gs.map(g=>{
+    const sum=items.filter(x=>(g.cats||[]).includes(x.cat)).reduce((a,x)=>a+x.price,0), lim=grpLimit(g);
+    const lv=lim?budLevel(sum,lim):"ok", names=(g.cats||[]).map(id=>(catById(id)||{name:"؟"}).name).join("، ");
+    const w=lim?Math.min(100,sum/lim*100):(total?sum/total*100:0);
+    return `<li class="grp-li"><button type="button" class="cat-row" data-rep-grp="${esc(g.id)}"><span class="dot" style="background:${g.color}"></span><span class="cat-name">${esc(g.name)}</span><span class="cat-amt num">${fmt(sum)} ${esc(cur().label)}</span>
+      <span class="cat-meta">${lim?budText(sum,lim):`${fmtInt(total?Math.round(sum/total*100):0)}٪ من الشهر`}<br><span class="note">${names?esc(names):"مفيش أصناف لسه"}</span></span>
+      <span class="bar${lim?" limit":""}"><i style="width:${Math.max(sum?3:0,w)}%;background:${budColor(lv,g.color)}"></i></span></button>
+      <span class="grp-tools"><button class="link" type="button" data-edit-grp="${esc(g.id)}">عدّل المجموعة</button></span></li>`;
+  }).join("") : `<li class="empty">اجمع كذا صنف تحت اسم واحد، مثلاً «الأكل» = البقالة والمطاعم والكافيهات والتسالي، وحط لها حد للشهر لو حابب وتشوف وصلت لفين.</li>`;
 
   // year
   const year=m.split("-")[0], nowKey=monthKey(new Date());
@@ -465,6 +533,7 @@ function render(){
       const c=catById(x.cat)||{name:"؟",color:"#868e96"};
       html+=`<li class="item" data-id="${esc(x.id)}"><button type="button" class="item-name" data-act="report" title="صرفت قد إيه على دي">${esc(x.name)}</button><span class="item-price num">${fmt(x.price)} ${esc(cur().label)}</span>
         <span class="item-tools"><span class="chip"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</span>
+        <button class="link" data-act="edit" type="button">عدّل السعر</button>
         <button class="link" data-act="recat" type="button">غيّر الصنف</button>
         <button class="link danger" data-act="del" type="button">امسح</button></span></li>`;
     }
@@ -539,6 +608,7 @@ document.getElementById("log").addEventListener("click",e=>{
   const btn=e.target.closest("[data-act]"); if(!btn) return;
   const li=btn.closest(".item"), id=li.dataset.id, m=state.viewMonth, list=state.months[m]||[], x=list.find(i=>i.id===id); if(!x) return;
   if(btn.dataset.act==="report"){ openReport({kind:"item",key:itemKey(x.name),name:x.name}); return; }
+  if(btn.dataset.act==="edit"){ editPrice(m,x); return; }
   if(btn.dataset.act==="del"){
     if(btn.dataset.armed){ state.months[m]=list.filter(i=>i.id!==id); saveMonth(m); render(); toast("اتمسح"); }
     else { btn.dataset.armed="1"; btn.textContent="متأكد؟ دوس تاني"; setTimeout(()=>{ if(btn.isConnected){ delete btn.dataset.armed; btn.textContent="امسح"; } },3000); }
@@ -561,6 +631,81 @@ document.getElementById("months").addEventListener("click",e=>{
 document.getElementById("prevM").addEventListener("click",()=>{ const [y,m]=state.viewMonth.split("-").map(Number); state.viewMonth=monthKey(new Date(y,m-2,1)); render(); });
 document.getElementById("nextM").addEventListener("click",()=>{ const [y,m]=state.viewMonth.split("-").map(Number); const n=monthKey(new Date(y,m,1)); if(n<=monthKey(new Date())){ state.viewMonth=n; render(); } });
 
+/* ---------- Edit an entry's price ---------- */
+function editPrice(m,x){
+  const L=esc(curInfo(itemCur(x)).label);
+  openSheet(`<h3>عدّل سعر «${esc(x.name)}»</h3><p>${esc(dayTitle(x.ts))} · السعر دلوقتي ${fmt(x.price)} ${L}</p>
+    <label class="fld">السعر الجديد (${L})<input id="epPrice" class="money-in num" type="text" inputmode="decimal" value="${esc(String(x.price))}"></label>
+    <div class="row"><button class="primary" type="button" id="epSave" style="padding:10px 18px">احفظ</button><button class="link" type="button" id="epCancel">إلغاء</button></div>`, s=>{
+    const inp=s.querySelector("#epPrice"); setTimeout(()=>{ inp.focus(); inp.select(); },50);
+    const save=()=>{ const p=parsePrice(inp.value); if(p===null){ toast("اكتب السعر بالأرقام، مثلاً 25"); inp.focus(); return; }
+      const it=(state.months[m]||[]).find(i=>i.id===x.id); if(!it){ closeSheet(); return; }
+      it.price=p; saveMonth(m); closeSheet(); render(); toast("السعر بقى "+fmt(p)+" "+curInfo(itemCur(it)).label); };
+    s.querySelector("#epSave").addEventListener("click",save);
+    inp.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); save(); } });
+    s.querySelector("#epCancel").addEventListener("click",closeSheet);
+  });
+}
+function parseLimit(s){ const t=toLatinDigits(String(s||"")).replace(/[^\d.]/g,""); if(!t) return 0; const v=parseFloat(t); return isFinite(v)&&v>0?v:0; }
+function limVal(v){ return v?String(v):""; }
+
+/* ---------- Monthly budget: total + per category ---------- */
+function monthSpend(){ const m=state.viewMonth, a=state.settings.currency; const by={}; let t=0;
+  for(const x of state.months[m]||[]) if(itemCur(x)===a){ by[x.cat]=(by[x.cat]||0)+x.price; t+=x.price; } return {by,t}; }
+function openBudget(){
+  const sp=monthSpend(), L=esc(cur().label), cats=allCats().concat([{id:"other",name:"حاجات تانية",color:"#868e96"}]);
+  openSheet(`<h3>ميزانية الشهر</h3>
+    <p>حط أقصى مبلغ عايز تصرفه كل شهر بال${esc(cur().name)}. سيب الخانة فاضية لو مش عايز حد. البرنامج هيوريك باقي كام وصرفت قد إيه من كل حد.</p>
+    <label class="fld"><b>الإجمالي في الشهر (${L})</b><input id="bTotal" class="money-in num" type="text" inputmode="decimal" placeholder="مثلاً 8000" value="${esc(limVal(totalLimit()))}"><span class="note">صرفت ${fmt(sp.t)} ${L} في ${esc(monthTitle(state.viewMonth))}</span></label>
+    <div class="rep-sec">حد لكل صنف (${L})</div>
+    <ul class="bud-list">${cats.map(c=>`<li><span class="dot" style="background:${c.color}"></span><span>${esc(c.name)}</span><input class="num" type="text" inputmode="decimal" data-bud="${esc(c.id)}" placeholder="من غير حد" value="${esc(limVal(catLimit(c.id)))}" aria-label="حد ${esc(c.name)}">${sp.by[c.id]?`<span class="note">صرفت ${fmt(sp.by[c.id])} الشهر ده</span>`:""}</li>`).join("")}</ul>
+    <div class="row"><button class="primary" type="button" id="bSave" style="padding:10px 18px">احفظ</button><button class="link" type="button" id="bCancel">إلغاء</button></div>`, s=>{
+    s.querySelector("#bCancel").addEventListener("click",closeSheet);
+    s.querySelector("#bSave").addEventListener("click",()=>{
+      const b=budgets(); const nb={total:setLimit(Object.assign({},b.total),parseLimit(s.querySelector("#bTotal").value)), cats:Object.assign({},b.cats)};
+      s.querySelectorAll("[data-bud]").forEach(inp=>{ const id=inp.dataset.bud; const o=setLimit(Object.assign({},nb.cats[id]||{}),parseLimit(inp.value)); if(Object.keys(o).length) nb.cats[id]=o; else delete nb.cats[id]; });
+      state.settings.budgets=nb; saveProfile(); closeSheet(); render(); toast("الميزانية اتحفظت");
+    });
+  });
+}
+
+/* ---------- Groups: several categories under one name ---------- */
+const GROUP_COLORS=["#0b7285","#e67700","#5f3dc4","#2b8a3e","#c2255c","#1864ab","#a61e4d","#495057"];
+function editGroup(id){
+  const g=groups().find(x=>x.id===id), cats=allCats().concat([{id:"other",name:"حاجات تانية",color:"#868e96"}]), L=esc(cur().label);
+  const on=new Set(g?g.cats||[]:[]);
+  openSheet(`<h3>${g?"عدّل المجموعة":"مجموعة جديدة"}</h3>
+    <p>اجمع كذا صنف تحت اسم واحد، وصرفها كله هيتجمع مع بعض.</p>
+    <label class="fld">اسم المجموعة<input id="gName" type="text" placeholder="مثلاً: الأكل" value="${esc(g?g.name:"")}"></label>
+    <div class="fld"><b>الأصناف اللي فيها</b><div class="checks">${cats.map(c=>`<label><input type="checkbox" value="${esc(c.id)}" ${on.has(c.id)?"checked":""}><span class="dot" style="background:${c.color};flex:none"></span>${esc(c.name)}</label>`).join("")}</div></div>
+    <label class="fld">حد المجموعة في الشهر (${L}) <span class="note">اختياري</span><input id="gLim" class="money-in num" type="text" inputmode="decimal" placeholder="من غير حد" value="${esc(limVal(grpLimit(g)))}"></label>
+    <div class="row"><button class="primary" type="button" id="gSave" style="padding:10px 18px">احفظ</button>${g?`<button class="link danger" type="button" id="gDel">امسح المجموعة</button>`:""}<button class="link" type="button" id="gCancel">إلغاء</button></div>`, s=>{
+    s.querySelector("#gCancel").addEventListener("click",closeSheet);
+    if(!g) setTimeout(()=>s.querySelector("#gName").focus(),50);
+    s.querySelector("#gSave").addEventListener("click",()=>{
+      const name=s.querySelector("#gName").value.trim(), picked=[...s.querySelectorAll(".checks input:checked")].map(x=>x.value);
+      if(!name){ toast("اكتب اسم المجموعة"); s.querySelector("#gName").focus(); return; }
+      if(!picked.length){ toast("اختار صنف واحد على الأقل"); return; }
+      if(groups().some(x=>x.id!==id&&norm(x.name)===norm(name))){ toast("فيه مجموعة بالاسم ده بالفعل"); return; }
+      const list=groups().slice(), lim=parseLimit(s.querySelector("#gLim").value);
+      if(g){ const i=list.findIndex(x=>x.id===id); list[i]=Object.assign({},g,{name,cats:picked,limits:setLimit(Object.assign({},g.limits||{}),lim)}); }
+      else list.push({id:"g"+Date.now().toString(36),name,color:GROUP_COLORS[list.length%GROUP_COLORS.length],cats:picked,limits:setLimit({},lim)});
+      state.settings.groups=list; saveProfile(); closeSheet(); render(); toast(g?"المجموعة اتعدلت":"اتعملت مجموعة "+name);
+    });
+    const del=s.querySelector("#gDel"); if(del) del.addEventListener("click",()=>{
+      if(!del.dataset.armed){ del.dataset.armed="1"; del.textContent="متأكد؟ دوس تاني (المصاريف مش هتتمسح)"; return; }
+      state.settings.groups=groups().filter(x=>x.id!==id); saveProfile(); closeSheet(); render(); toast("المجموعة اتمسحت");
+    });
+  });
+}
+document.getElementById("addGroup").addEventListener("click",()=>editGroup(null));
+document.getElementById("openBudget").addEventListener("click",openBudget);
+document.getElementById("sumBudget").addEventListener("click",openBudget);
+document.getElementById("groups").addEventListener("click",e=>{
+  const ed=e.target.closest("[data-edit-grp]"); if(ed){ editGroup(ed.dataset.editGrp); return; }
+  const b=e.target.closest("[data-rep-grp]"); if(b) openReport({kind:"grp",id:b.dataset.repGrp});
+});
+
 /* ---------- Report: one category or one item, month by month ---------- */
 function allYears(){
   const now=new Date().getFullYear(); let min=now;
@@ -572,11 +717,15 @@ function openReport(rep){
   const active=state.settings.currency, nowKey=monthKey(new Date()), L=esc(cur().label);
   const yr=allYears(); const year=Math.min(yr.max,Math.max(yr.min,rep.year||+state.viewMonth.slice(0,4)));
   const qk=rep.kind==="q"?itemKey(rep.q):"";
+  const grp = rep.kind==="grp" ? groups().find(g=>g.id===rep.id) : null;
+  if(rep.kind==="grp"&&!grp){ closeSheet(); return; }
   const match = rep.kind==="cat" ? x=>x.cat===rep.id
+    : rep.kind==="grp" ? x=>(grp.cats||[]).includes(x.cat)
     : rep.kind==="item" ? x=>itemKey(x.name)===rep.key
     : x=>itemKey(x.name).includes(qk);
   let color="var(--accent)", title;
   if(rep.kind==="cat"){ const c=catById(rep.id)||{name:rep.id,color:"#868e96"}; color=c.color; title=`<span class="dot" style="background:${c.color}"></span>${esc(c.name)}`; }
+  else if(rep.kind==="grp"){ color=grp.color; title=`<span class="dot" style="background:${grp.color}"></span>مجموعة ${esc(grp.name)}`; }
   else if(rep.kind==="item") title="«"+esc(rep.name)+"»";
   else title="كل اللي فيه «"+esc(rep.q)+"»";
   const rows=[], picked=[]; let yTotal=0,yMax=0,n=0;
@@ -589,9 +738,16 @@ function openReport(rep){
   const spent=rows.filter(r=>r.sum>0).length;
   const yTxt=state.settings.digits==="en"?String(year):fmtInt(year);
   const vm=rows.find(r=>r.k===state.viewMonth);
+  const repLim = rep.kind==="cat" ? catLimit(rep.id) : rep.kind==="grp" ? grpLimit(grp) : null;
   // what it was spent on (for a category or a search), or purchase details (for one item)
   let detail="";
-  if(rep.kind!=="item"){
+  if(rep.kind==="grp"){
+    const g={}; picked.forEach(x=>{ g[x.cat]=(g[x.cat]||0)+x.price; });
+    const list=(grp.cats||[]).map(id=>[id,g[id]||0]).sort((a,b)=>b[1]-a[1]), gmax=list.length&&list[0][1]?list[0][1]:1;
+    if(list.length) detail=`<div class="rep-sec">كل صنف في ${yTxt}</div><ul class="months">${list.map(([id,v])=>{ const c=catById(id)||{name:"؟",color:"#868e96"}; return `<li><button type="button" data-rep-cat2="${esc(id)}">
+      <span class="m-name"><span class="dot" style="background:${c.color};display:inline-block"></span> ${esc(c.name)}</span><span class="m-amt num ${v?"":"zero"}">${v?fmt(v)+" "+L:"مفيش"}</span>
+      <span class="bar" style="grid-column:1 / -1"><i style="width:${v/gmax*100}%;background:${c.color}"></i></span></button></li>`; }).join("")}</ul>`;
+  } else if(rep.kind!=="item"){
     const g={}; picked.forEach(x=>{ const key=itemKey(x.name); const e=g[key]||(g[key]={name:x.name,ts:0,sum:0,n:0}); e.sum+=x.price; e.n++; if(x.ts>e.ts){e.ts=x.ts;e.name=x.name;} });
     const list=Object.entries(g).sort((a,b)=>b[1].sum-a[1].sum);
     const gmax=list.length?list[0][1].sum:1;
@@ -609,19 +765,22 @@ function openReport(rep){
       <div><span>إجمالي السنة</span><b class="num">${fmt(yTotal)} <small>${L}</small></b></div>
       <div><span>متوسط الشهر</span><b class="num">${spent?fmt(Math.round(yTotal/spent)):"٠"} <small>${L}</small></b></div>
       ${vm?`<div><span>${MONTHS[vm.i-1]}</span><b class="num">${fmt(vm.sum)} <small>${L}</small></b></div>`:""}
+      ${repLim?`<div><span>حد الشهر</span><b class="num">${fmt(repLim)} <small>${L}</small></b></div>`:""}
       <div><span>عدد المرات في السنة</span><b class="num">${fmtInt(n)}</b></div>
     </div>
     ${n?`<div class="rep-sec">شهر بشهر</div><ul class="months">${rows.slice().reverse().map(r=>`<li><button type="button" data-month="${r.k}" class="${r.k===state.viewMonth?"on":""}">
       <span class="m-name">${MONTHS[r.i-1]}${r.cnt?` <span class="cat-go">· ${times(r.cnt)}</span>`:""}</span><span class="m-amt num ${r.sum?"":"zero"}">${r.sum?fmt(r.sum)+" "+L:"مفيش"}</span>
-      <span class="bar" style="grid-column:1 / -1"><i style="width:${yMax?r.sum/yMax*100:0}%;background:${color}"></i></span></button></li>`).join("")}</ul>${detail}`
+      <span class="bar" style="grid-column:1 / -1"><i style="width:${repLim?Math.min(100,r.sum/repLim*100):(yMax?r.sum/yMax*100:0)}%;background:${repLim?budColor(budLevel(r.sum,repLim),color):color}"></i></span></button></li>`).join("")}</ul>${detail}`
       :`<p class="empty">مفيش مصاريف ${rep.kind==="q"?"فيها «"+esc(rep.q)+"» ":"على دي "}في سنة ${yTxt} بال${esc(cur().name)}.</p>`}
-    <div class="row">${rep.back?`<button class="secondary" type="button" id="rBack">رجوع</button>`:""}<button class="primary" type="button" id="rClose" style="padding:10px 18px">تمام</button></div>`, s=>{
+    <div class="row">${rep.back?`<button class="secondary" type="button" id="rBack">رجوع</button>`:""}${grp?`<button class="secondary" type="button" id="rEditG">عدّل المجموعة</button>`:""}<button class="primary" type="button" id="rClose" style="padding:10px 18px">تمام</button></div>`, s=>{
     const again=y=>openReport(Object.assign({},rep,{year:y}));
     s.querySelector("#rPrev").addEventListener("click",()=>again(year-1));
     s.querySelector("#rNext").addEventListener("click",()=>again(year+1));
     s.querySelector("#rClose").addEventListener("click",closeSheet);
+    const eg=s.querySelector("#rEditG"); if(eg) eg.addEventListener("click",()=>editGroup(grp.id));
     const bk=s.querySelector("#rBack"); if(bk) bk.addEventListener("click",()=>openReport(Object.assign({},rep.back,{year})));
     s.querySelectorAll("[data-month]").forEach(b=>b.addEventListener("click",()=>{ state.viewMonth=b.dataset.month; closeSheet(); render(); window.scrollTo({top:0,behavior:"smooth"}); }));
+    s.querySelectorAll("[data-rep-cat2]").forEach(b=>b.addEventListener("click",()=>openReport({kind:"cat",id:b.dataset.repCat2,year,back:Object.assign({},rep,{back:null})})));
     s.querySelectorAll("[data-rep-item]").forEach(b=>b.addEventListener("click",()=>openReport({kind:"item",key:b.dataset.repItem,name:b.dataset.name,year,back:Object.assign({},rep,{back:null})})));
   });
 }
@@ -740,6 +899,8 @@ function manageCats(){
       for(const [mk,l] of Object.entries(state.months)){ let ch=false; for(const it of l||[]) if(it.cat===id){ it.cat="other"; ch=true; } if(ch) saveMonth(mk); }
       for(const k of Object.keys(state.learned)) if(state.learned[k]===id) delete state.learned[k];
       state.settings.customCats=(state.settings.customCats||[]).filter(c=>c.id!==id);
+      if(state.settings.budgets&&state.settings.budgets.cats) delete state.settings.budgets.cats[id];
+      state.settings.groups=groups().map(g=>Object.assign({},g,{cats:(g.cats||[]).filter(c=>c!==id)}));
       saveProfile(); render(); manageCats(); toast("الصنف اتمسح");
     }));
   });
@@ -776,6 +937,10 @@ function applyBackup(j){
   (bs.customCats||[]).forEach(c=>{ if(c&&c.id&&!mineIds.has(c.id)){ mine.push(c); mineIds.add(c.id); } });
   state.settings.customCats=mine;
   if(bs.catNames&&typeof bs.catNames==="object") state.settings.catNames=Object.assign({},bs.catNames,state.settings.catNames||{});
+  if(Array.isArray(bs.groups)){ const mineG=groups().slice(), gIds=new Set(mineG.map(g=>g.id)); bs.groups.forEach(g=>{ if(g&&g.id&&g.name&&Array.isArray(g.cats)&&!gIds.has(g.id)){ mineG.push(g); gIds.add(g.id); } }); state.settings.groups=mineG; }
+  if(bs.budgets&&typeof bs.budgets==="object"){ const mb=budgets(), ob=bs.budgets, cats=Object.assign({},mb.cats);
+    for(const [id,v] of Object.entries(ob.cats||{})) if(v&&typeof v==="object") cats[id]=Object.assign({},v,cats[id]||{});
+    state.settings.budgets={total:Object.assign({},ob.total||{},mb.total),cats}; }
   if(Array.isArray(bs.currencies)) state.settings.currencies=[...new Set((state.settings.currencies||[]).concat(bs.currencies))];
   touched.forEach(saveMonth); saveProfile(); render(); closeSheet();
   toast(added?"رجّعت "+fmtInt(added)+" مصروف من النسخة":"كل اللي في النسخة موجود عندك بالفعل");
